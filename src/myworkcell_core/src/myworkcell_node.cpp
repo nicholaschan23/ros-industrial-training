@@ -7,10 +7,13 @@ public:
   ScanNPlan() : Node("scan_n_plan")
   {
     vision_client_ = this->create_client<myworkcell_core::srv::LocalizePart>("localize_part");
+    // (parameter name, default value)
+    // Parameter type is fixed from the type of he default value
+    this->declare_parameter("base_frame", "world");
   }
 
-  void start()
-  {
+  void start(const std::string& base_frame)
+  {    
     RCLCPP_INFO(get_logger(), "Attempting to localize part");
 
     // Wait for service to be available
@@ -22,6 +25,8 @@ public:
 
     // Create a request for the LocalizePart service call
     auto request = std::make_shared<myworkcell_core::srv::LocalizePart::Request>();
+    request->base_frame = base_frame;
+    RCLCPP_INFO_STREAM(get_logger(), "Requesting pose in base frame: " << base_frame);
 
     auto future = vision_client_->async_send_request(request);
 
@@ -60,7 +65,12 @@ int main(int argc, char **argv)
 
   // Create the ScanNPlan node
   auto app = std::make_shared<ScanNPlan>();
-  app->start();
+  std::string base_frame = app->get_parameter("base_frame").as_string();
+
+  // Wait for the vision node to receive data
+  rclcpp::sleep_for(std::chrono::seconds(2));
+
+  app->start(base_frame);
 
   rclcpp::shutdown();
   return 0;
