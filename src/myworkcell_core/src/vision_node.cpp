@@ -5,10 +5,16 @@
 #include <fake_ar_publisher/msg/ar_marker.hpp>
 #include <myworkcell_core/srv/localize_part.hpp>
 
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
+
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+
 class Localizer : public rclcpp::Node
 {
 public:
-  Localizer() : Node("vision_node"), last_msg_{nullptr}
+  Localizer() : Node("vision_node"), buffer_(this->get_clock()), listener_(buffer_)
   {
     ar_sub_ = this->create_subscription<fake_ar_publisher::msg::ARMarker>(
         "ar_pose_marker",
@@ -42,7 +48,19 @@ public:
       return;
     }
 
-    res->pose = p->pose.pose;
+    // Init PoseStamped obj
+    geometry_msgs::msg::PoseStamped target_pose_from_cam;
+    target_pose_from_cam.header = p->header;
+    target_pose_from_cam.pose = p->pose.pose;
+
+    // Use buffer obj to transform PoseStamped to another coord frame
+    // Specified frame from service request
+    geometry_msgs::msg::PoseStamped target_pose_from_req = buffer_.transform(
+        target_pose_from_cam, req->base_frame);
+
+
+//    res->pose = p->pose.pose;
+    res->pose = target_pose_from_req.pose;
     res->success = true;
   }
 
@@ -51,6 +69,9 @@ public:
   fake_ar_publisher::msg::ARMarker::SharedPtr last_msg_;
 
   rclcpp::Service<myworkcell_core::srv::LocalizePart>::SharedPtr server_;
+
+  tf2_ros::Buffer buffer_;
+  tf2_ros::TransformListener listener_;
 };
 
 
