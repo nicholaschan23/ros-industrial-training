@@ -1,15 +1,37 @@
 #include <rclcpp/rclcpp.hpp>
 #include <myworkcell_core/srv/localize_part.hpp>
 
+#include <geometry_msgs/msg/pose_stamped.hpp>
+
+#include <moveit/moveit_cpp/moveit_cpp.h>
+#include <moveit/moveit_cpp/planning_component.h>
+
 class ScanNPlan : public rclcpp::Node
 {
 public:
-  ScanNPlan() : Node("scan_n_plan")
+  ScanNPlan() : Node("scan_n_plan", rclcpp::NodeOptions().automatically_declare_parameters_from_overrides(true))
   {
+    if (! this->has_parameter("base_frame"))
+    {
+      // (parameter name, default value)
+      // Parameter type is fixed from the type of he default value
+      this->declare_parameter("base_frame", "world");
+    }
+
     vision_client_ = this->create_client<myworkcell_core::srv::LocalizePart>("localize_part");
-    // (parameter name, default value)
-    // Parameter type is fixed from the type of he default value
-    this->declare_parameter("base_frame", "world");
+  }
+
+  // MoveIt setup
+  void setup()
+  {
+    // Instantiate moveit_cpp
+    moveit_cpp_ = std::make_shared<moveit_cpp::MoveItCpp>(this->shared_from_this());
+
+    // Planning component associated with a single motion group
+    planning_component_ = std::make_shared<moveit_cpp::PlanningComponent>("manipulator", moveit_cpp_);
+
+    // Parameters set on this node
+    plan_parameters_.load(this->shared_from_this());
   }
 
   void start(const std::string& base_frame)
@@ -31,7 +53,8 @@ public:
     auto future = vision_client_->async_send_request(request);
 
     // Wait for response
-    if (rclcpp::spin_until_future_complete(this->get_node_base_interface(), future) != rclcpp::FutureReturnCode::SUCCESS)
+//    if (rclcpp::spin_until_future_complete(this->get_node_base_interface(), future) != rclcpp::FutureReturnCode::SUCCESS)
+    if (future.wait_for(std::chrono::seconds(3)) == std::future_status::timeout)
     {
       // Never got response
       RCLCPP_ERROR(this->get_logger(), "Failed to receive LocalizePart service response");
@@ -50,11 +73,51 @@ public:
         response->pose.position.x,
         response->pose.position.y,
         response->pose.position.z);
+
+    // Use the response to init a new move_target var
+    geometry_msgs::msg::PoseStamped move_target;
+    move_target.header.frame_id = base_frame;
+    move_target.pose = response->pose;
+
+    // getting current state of robot from environment
+    if (!moveit_cpp_->getPlanningSceneMonitor()->requestPlanningSceneState())
+    {
+      RCLCPP_ERROR(this->get_logger(), "Failed to get planning scene");
+      return;
+    }
+    moveit::core::RobotStatePtr start_robot_state = moveit_cpp_->getCurrentState(2.0);
+
+    // Set motion goal of end effector link
+    std::string ee_link = moveit_cpp_->getRobotModel()->getJointModelGroup(
+        planning_component_->getPlanningGroupName())->getLinkModelNames().back();
+
+    planning_component_->setStartState(*start_robot_state);
+    planning_component_->setGoal(move_target, ee_link);
+
+    // Now we can plan!
+    moveit_cpp::PlanningComponent::PlanSolution plan_solution = planning_component_->plan(plan_parameters_);
+    if (!plan_solution)
+    {
+      RCLCPP_ERROR(this->get_logger(),"Failed to plan");
+      return;
+    }
+
+    // If planning succeeded, execute the returned trajectory
+    bool success = moveit_cpp_->execute("manipulator", plan_solution.trajectory, true);
+    if (!success)
+    {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Failed to execute trajectory");
+      return;
+    }
   }
 
 private:
   // Planning components
   rclcpp::Client<myworkcell_core::srv::LocalizePart>::SharedPtr vision_client_;
+
+  moveit_cpp::MoveItCppPtr moveit_cpp_;
+  moveit_cpp::PlanningComponentPtr planning_component_;
+  moveit_cpp::PlanningComponent::PlanRequestParameters plan_parameters_;
 };
 
 
@@ -66,6 +129,12 @@ int main(int argc, char **argv)
   // Create the ScanNPlan node
   auto app = std::make_shared<ScanNPlan>();
   std::string base_frame = app->get_parameter("base_frame").as_string();
+
+  // Start spinning in a background thread so MoveIt internals can execute
+  std::thread worker{ [app]() { rclcpp::spin(app); } };
+
+  // Perform MoveIt initialization
+  app->setup();
 
   // Wait for the vision node to receive data
   rclcpp::sleep_for(std::chrono::seconds(2));

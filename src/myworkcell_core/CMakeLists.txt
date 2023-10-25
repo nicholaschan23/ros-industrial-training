@@ -18,6 +18,10 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 
+# Moveit
+find_package(moveit_msgs REQUIRED)
+find_package(moveit_ros_planning_interface REQUIRED)
+
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/LocalizePart.srv"
   DEPENDENCIES geometry_msgs
@@ -31,7 +35,7 @@ target_link_libraries(vision_node "${cpp_typesupport_target}")
 
 # The myworkcell_node executable
 add_executable(myworkcell_node src/myworkcell_node.cpp)
-ament_target_dependencies(myworkcell_node rclcpp)
+ament_target_dependencies(myworkcell_node rclcpp moveit_msgs moveit_ros_planning_interface)
 target_link_libraries(myworkcell_node "${cpp_typesupport_target}")
 
 # Mark executables for installation
